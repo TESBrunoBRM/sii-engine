@@ -109,7 +109,6 @@ export interface EnvioDTECaratula {
   rndrOk?: string;
   fechaResolucion: string;
   nroResolucion: number;
-  tiposDTE: number[];
   fechaFirmaEnvio: string;
   mnota?: string;
 }

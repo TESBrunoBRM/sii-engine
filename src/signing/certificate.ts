@@ -19,21 +19,50 @@ export function loadCertificateFromP12(
     );
   }
 
-  const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
-  const keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+  const certBags = Object.values(p12.getBags({ bagType: forge.pki.oids.certBag })).flat();
+  const keyBags = Object.values(p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })).flat();
 
-  const certBag = Object.values(certBags).flat()[0];
-  const keyBag = Object.values(keyBags).flat()[0];
-
-  if (!certBag?.cert) {
-    throw new SiiCertError("CERT_LOAD_ERROR", "No se encontró el certificado en el archivo P12");
+  if (certBags.length === 0) {
+    throw new SiiCertError("CERT_LOAD_ERROR", "No se encontró ningún certificado en el archivo P12");
   }
-  if (!keyBag?.key) {
-    throw new SiiCertError("CERT_LOAD_ERROR", "No se encontró la clave privada en el archivo P12");
+  if (keyBags.length === 0) {
+    throw new SiiCertError("CERT_LOAD_ERROR", "No se encontró ninguna clave privada en el archivo P12");
   }
 
-  const cert = certBag.cert;
-  const privateKey = keyBag.key;
+  let matchedCert: forge.pki.Certificate | undefined;
+  let matchedKey: forge.pki.PrivateKey | undefined;
+
+  for (const keyBag of keyBags) {
+    if (!keyBag?.key) continue;
+    const privateKey = keyBag.key as forge.pki.rsa.PrivateKey;
+    if (!privateKey.n) continue;
+    const privateModulus = privateKey.n.toString(16);
+
+    for (const certBag of certBags) {
+      if (!certBag?.cert) continue;
+      const cert = certBag.cert;
+      const publicKey = cert.publicKey as forge.pki.rsa.PublicKey;
+      if (!publicKey.n) continue;
+      const publicModulus = publicKey.n.toString(16);
+
+      if (privateModulus === publicModulus) {
+        matchedCert = cert;
+        matchedKey = privateKey;
+        break;
+      }
+    }
+    if (matchedCert) break;
+  }
+
+  if (!matchedCert || !matchedKey) {
+    throw new SiiCertError(
+      "CERT_LOAD_ERROR",
+      "No se encontró un par clave-certificado válido (el Modulus RSA no coincide)."
+    );
+  }
+
+  const cert = matchedCert;
+  const privateKey = matchedKey;
 
   const expiresAt = new Date(cert.validity.notAfter);
   if (expiresAt < new Date()) {
@@ -124,19 +153,23 @@ export function getRsaModulusAndExponent(certificatePem: string): {
 function extractRutFromCert(cert: forge.pki.Certificate): string {
   const attrs = cert.subject.attributes;
   for (const attr of attrs) {
-    if (attr.name === "serialName" || attr.shortName === "SN") {
-      const val = String(attr.value ?? "");
-      if (val.match(/\d+-[\dkK]/)) return val;
+    // 2.5.4.5 is serialNumber
+    if (attr.name === "serialName" || attr.shortName === "SN" || attr.type === "2.5.4.5") {
+      const val = String(attr.value ?? "").replace(/\./g, "");
+      const match = val.match(/(\d+-[\dkK])/);
+      if (match) return match[1];
     }
     if (attr.name === "commonName" || attr.shortName === "CN") {
-      const val = String(attr.value ?? "");
-      const match = val.match(/(\d{1,2}\.\d{3}\.\d{3}-[\dkK]|\d+-[\dkK])/);
-      if (match) return match[1].replace(/\./g, "");
+      const val = String(attr.value ?? "").replace(/\./g, "");
+      const match = val.match(/(\d+-[\dkK])/);
+      if (match) return match[1];
     }
   }
-  const emailAttr = attrs.find((a) => a.name === "emailAddress");
-  if (emailAttr) return String(emailAttr.value ?? "");
-  return "";
+
+  throw new SiiCertError(
+    "CERT_LOAD_ERROR",
+    "El certificado no contiene un RUT tributario explícito en sus atributos (requerido para firmar)."
+  );
 }
 
 function extractNameFromCert(cert: forge.pki.Certificate): string {

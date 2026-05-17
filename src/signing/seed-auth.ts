@@ -1,9 +1,10 @@
 import axios from "axios";
 import forge from "node-forge";
 import { XMLParser } from "fast-xml-parser";
-import type { CertificateMaterial } from "../types/signing.types.js";
+import type { CertificateMaterial, SigningProvider } from "../types/signing.types.js";
 import type { SiiAuthToken } from "../types/transport.types.js";
 import { SiiEnvironment } from "../types/transport.types.js";
+import type { IssuerContext } from "../types/context.types.js";
 import { SiiAuthError } from "../errors/sii-errors.js";
 
 const SEED_ENDPOINTS: Record<SiiEnvironment, string> = {
@@ -158,26 +159,49 @@ export function isTokenValid(authToken: SiiAuthToken): boolean {
 }
 
 export class SiiTokenManager {
-  private cache: Map<SiiEnvironment, SiiAuthToken> = new Map();
+  private cache: Map<string, SiiAuthToken> = new Map();
+  private inFlightRequests: Map<string, Promise<SiiAuthToken>> = new Map();
 
-  async getToken(
-    environment: SiiEnvironment,
-    cert: CertificateMaterial,
-    forceRefresh?: boolean
-  ): Promise<SiiAuthToken> {
-    const cached = this.cache.get(environment);
-    if (!forceRefresh && cached && isTokenValid(cached)) {
-      return cached;
-    }
-
-    const token = await getAuthToken(environment, cert);
-    this.cache.set(environment, token);
-    return token;
+  private getCacheKey(context: IssuerContext): string {
+    return `${context.environment}:${context.rutEmisor}`;
   }
 
-  invalidate(environment?: SiiEnvironment): void {
-    if (environment) {
-      this.cache.delete(environment);
+  async getToken(
+    context: IssuerContext,
+    signingProvider: SigningProvider,
+    forceRefresh?: boolean
+  ): Promise<SiiAuthToken> {
+    const key = this.getCacheKey(context);
+
+    if (!forceRefresh) {
+      const cached = this.cache.get(key);
+      if (cached && isTokenValid(cached)) {
+        return cached;
+      }
+    }
+
+    if (!forceRefresh && this.inFlightRequests.has(key)) {
+      return this.inFlightRequests.get(key)!;
+    }
+
+    const promise = (async () => {
+      try {
+        const cert = await signingProvider.getSigningMaterial(context);
+        const token = await getAuthToken(context.environment, cert);
+        this.cache.set(key, token);
+        return token;
+      } finally {
+        this.inFlightRequests.delete(key);
+      }
+    })();
+
+    this.inFlightRequests.set(key, promise);
+    return promise;
+  }
+
+  invalidate(context?: IssuerContext): void {
+    if (context) {
+      this.cache.delete(this.getCacheKey(context));
     } else {
       this.cache.clear();
     }

@@ -118,7 +118,7 @@ packages:
 import {
   TipoDTE,
   SiiEnvironment,
-  FolioManager,
+  InMemoryFolioProvider,
   parseCaf,
   loadCertificateFromP12,
   SiiTokenManager,
@@ -133,6 +133,8 @@ import {
   validateDteDocument,
   type DteDocument,
   type CertificateMaterial,
+  type IssuerContext,
+  type SigningProvider,
 } from 'sii-engine';
 ```
 
@@ -158,39 +160,65 @@ const keyPem  = fs.readFileSync('key.pem', 'utf-8');
 const certMaterial = loadCertificateFromPem(certPem, keyPem);
 ```
 
-### 3. Cargar un CAF y gestionar folios
+### 3. Definir el contexto del emisor (IssuerContext)
+
+Para aplicaciones multi-tenant, toda la información se inyecta por operación, no de forma global:
 
 ```typescript
-import { parseCaf, FolioManager, TipoDTE } from 'sii-engine';
+const context: IssuerContext = {
+  tenantId: 'tenant-123',
+  merchantId: 'merchant-456',
+  branchId: 'sucursal-centro',
+  environment: SiiEnvironment.Certificacion,
+  rutEmisor: '76212345-6',
+  fechaResolucion: '2014-08-22',
+  nroResolucion: 80,
+  certificateRef: 'aws:kms:secret-id-cert',
+};
+
+const mockSigningProvider: SigningProvider = {
+  async getSigningMaterial(ctx: IssuerContext) {
+    // Aquí puedes buscar en tu DB o KMS usando ctx.certificateRef
+    return certMaterial;
+  }
+};
+```
+
+### 4. Cargar un CAF y gestionar folios
+
+Para producción, debes implementar `FolioProvider` con bloqueos en DB. Para desarrollo, puedes usar `InMemoryFolioProvider`:
+
+```typescript
+import { parseCaf, InMemoryFolioProvider, TipoDTE } from 'sii-engine';
 
 const cafXml = fs.readFileSync('caf_33.xml', 'utf-8');
 const caf = parseCaf(cafXml);
 
-const folioManager = new FolioManager();
-folioManager.addCaf(caf);
+const folioProvider = new InMemoryFolioProvider();
+folioProvider.addCaf(caf);
 
 // Consultar estado de folios disponibles
-const status = folioManager.getStatus(TipoDTE.FacturaElectronica);
+const status = await folioProvider.getStatus(context, TipoDTE.FacturaElectronica);
 console.log('Folios disponibles:', status[0].remaining);
 
 // Obtener el siguiente folio
-const assignment = folioManager.getNextFolio(TipoDTE.FacturaElectronica);
+const assignment = await folioProvider.getNextFolio(context, TipoDTE.FacturaElectronica);
 console.log('Folio asignado:', assignment.folio);
 ```
 
-### 4. Obtener token de autenticación SII
+### 5. Obtener token de autenticación SII
 
 ```typescript
-import { SiiTokenManager, SiiEnvironment } from 'sii-engine';
+import { SiiTokenManager } from 'sii-engine';
 
 const tokenManager = new SiiTokenManager();
 
-// Obtiene token nuevo o usa el caché si aún es válido (~50 min)
-const authToken = await tokenManager.getToken(SiiEnvironment.Certificacion, certMaterial);
+// Obtiene token nuevo o usa el caché. La caché aísla por emisor y entorno.
+const authToken = await tokenManager.getToken(context, mockSigningProvider);
 console.log('Token SII:', authToken.token);
 ```
 
-### 5. Construir y firmar una Factura Electrónica (DTE 33)
+### 6. Construir y firmar una Factura Electrónica (DTE 33)
 
 ```typescript
 import {
@@ -251,8 +279,8 @@ const documento: DteDocument = {
   },
 };
 
-// Validar antes de construir
-validateDteDocument(documento);
+// Validar antes de construir (validación estricta cruzada con contexto y CAF)
+validateDteDocument(documento, context, assignment.caf);
 
 // 1. Firmar el TED con la clave del CAF
 const frma = signTed(documento, assignment.caf);
@@ -269,7 +297,7 @@ const signedDteXml = signDteDocument(dteXml, documento, certMaterial);
 console.log('DTE firmado correctamente');
 ```
 
-### 6. Construir una Boleta Electrónica (DTE 39)
+### 7. Construir una Boleta Electrónica (DTE 39)
 
 ```typescript
 const boleta: DteDocument = {
@@ -312,7 +340,7 @@ const dteB  = buildDteXml(boleta, tedB);
 const signedBoleta = signDteDocument(dteB, boleta, certMaterial);
 ```
 
-### 7. Construir una Nota de Crédito (DTE 61)
+### 8. Construir una Nota de Crédito (DTE 61)
 
 ```typescript
 import { TipoReferencia } from 'sii-engine';
@@ -355,7 +383,7 @@ const notaCredito: DteDocument = {
 };
 ```
 
-### 8. Enviar al SII (Facturas/Notas — canal legacy)
+### 9. Enviar al SII (Facturas/Notas — canal legacy)
 
 ```typescript
 import {
@@ -382,7 +410,6 @@ const caratula: EnvioDTECaratula = {
   rutEnvia: certMaterial.rutFirmante,
   fechaResolucion: '2014-08-22',  // fecha resolución SII
   nroResolucion: 80,
-  tiposDTE: [TipoDTE.FacturaElectronica],
   fechaFirmaEnvio: new Date().toISOString().replace(/\.\d{3}Z$/, ''),
 };
 
@@ -390,19 +417,15 @@ const caratula: EnvioDTECaratula = {
 const envioDteXml = buildEnvioDteXml(dtesFirmados, caratula);
 const envioDteSigned = signEnvelope(envioDteXml, certMaterial);
 
-// Enviar al SII
-const client = new LegacySiiClient(
-  SiiEnvironment.Certificacion,
-  '76212345',  // RUT sin DV
-  '6'          // DV
-);
+// Enviar al SII pasándole el contexto en la ejecución
+const client = new LegacySiiClient();
 
-const result = await client.send(envioDteSigned, authToken.token);
+const result = await client.send(envioDteSigned, context, authToken.token);
 console.log('TrackID:', result.trackId);
 console.log('Estado:', result.status);  // SOK, EPR, etc.
 ```
 
-### 9. Enviar Boleta al SII + RVD diario
+### 10. Enviar Boleta al SII + RVD diario
 
 ```typescript
 import {
@@ -412,16 +435,12 @@ import {
   signEnvelope,
 } from 'sii-engine';
 
-const boletaClient = new BoletaSiiClient(
-  SiiEnvironment.Certificacion,
-  '76212345',
-  '6'
-);
+const boletaClient = new BoletaSiiClient();
 
-// Enviar boleta
+// Enviar boleta pasándole el contexto
 const envioBoletaXml = buildEnvioBoletaXml([{ document: boleta, tedXml: tedB, signedXml: signedBoleta }], caratula);
 const envioBoletaSigned = signEnvelope(envioBoletaXml, certMaterial);
-const resultBoleta = await boletaClient.send(envioBoletaSigned, authToken.token);
+const resultBoleta = await boletaClient.send(envioBoletaSigned, context, authToken.token);
 
 // Enviar Resumen de Ventas Diarias (obligatorio todos los días, incluso sin ventas)
 const rvdXml = buildResumenVentasDiariasXml(
@@ -442,14 +461,14 @@ const rvdXml = buildResumenVentasDiariasXml(
 );
 
 const rvdSigned = signEnvelope(rvdXml, certMaterial);
-const resultRvd = await boletaClient.sendRvd(rvdSigned, authToken.token);
+const resultRvd = await boletaClient.sendRvd(rvdSigned, context, authToken.token);
 ```
 
-### 10. Consultar estado de envío
+### 11. Consultar estado de envío
 
 ```typescript
 // Consultar estado del sobre enviado (por TrackID)
-const statusResult = await client.queryStatus(result.trackId, authToken.token);
+const statusResult = await client.queryStatus(result.trackId, context, authToken.token);
 console.log('Estado envío:', statusResult.status);
 // PRD = Procesado Definitivo, EPR = En Proceso, RSC = Rechazado, etc.
 
@@ -467,8 +486,8 @@ const dteStatus = await client.queryDteStatus(
     montoTotal: 952000,
     rutReceptor: '12345678',
     dvReceptor: '9',
-    token: authToken.token,
   },
+  context,
   authToken.token
 );
 console.log('Estado DTE:', dteStatus.status); // DOK, FAU, DNK, etc.
@@ -489,7 +508,7 @@ import {
 } from 'sii-engine';
 
 try {
-  const assignment = folioManager.getNextFolio(TipoDTE.FacturaElectronica);
+  const assignment = await folioProvider.getNextFolio(context, TipoDTE.FacturaElectronica);
 } catch (err) {
   if (err instanceof SiiCafError) {
     switch (err.code) {
@@ -504,7 +523,7 @@ try {
 }
 
 try {
-  const result = await client.send(envioDteXml, token);
+  const result = await client.send(envioDteXml, context, authToken.token);
 } catch (err) {
   if (err instanceof SiiSendError) {
     console.error(`Error de envío [${err.code}]:`, err.message);
@@ -524,43 +543,24 @@ try {
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import {
-  loadCertificateFromP12,
-  FolioManager,
-  parseCaf,
   SiiTokenManager,
   LegacySiiClient,
   BoletaSiiClient,
-  SiiEnvironment,
 } from 'sii-engine';
-import fs from 'fs';
 
 @Global()
 @Module({
   imports: [ConfigModule],
   providers: [
     {
-      provide: 'SII_CERT',
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const p12Path = config.get<string>('SII_CERT_PATH')!;
-        const password = config.get<string>('SII_CERT_PASSWORD')!;
-        return loadCertificateFromP12(fs.readFileSync(p12Path), password);
-      },
+      // Debes implementar tus propios Providers (Ej: DatabaseFolioProvider)
+      provide: 'FolioProvider',
+      useClass: TuFolioProviderSeguro, 
     },
     {
-      provide: FolioManager,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const manager = new FolioManager();
-        const cafDir = config.get<string>('SII_CAF_DIR')!;
-        for (const file of fs.readdirSync(cafDir)) {
-          if (file.endsWith('.xml')) {
-            const xml = fs.readFileSync(`${cafDir}/${file}`, 'utf-8');
-            manager.addCaf(parseCaf(xml));
-          }
-        }
-        return manager;
-      },
+      // Provee los certificados descifrándolos desde DB o AWS KMS
+      provide: 'SigningProvider',
+      useClass: TuSigningProviderSeguro,
     },
     {
       provide: SiiTokenManager,
@@ -568,30 +568,14 @@ import fs from 'fs';
     },
     {
       provide: LegacySiiClient,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) =>
-        new LegacySiiClient(
-          config.get('SII_ENV') === 'PRODUCCION'
-            ? SiiEnvironment.Produccion
-            : SiiEnvironment.Certificacion,
-          config.get<string>('SII_RUT')!,
-          config.get<string>('SII_DV')!,
-        ),
+      useClass: LegacySiiClient,
     },
     {
       provide: BoletaSiiClient,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) =>
-        new BoletaSiiClient(
-          config.get('SII_ENV') === 'PRODUCCION'
-            ? SiiEnvironment.Produccion
-            : SiiEnvironment.Certificacion,
-          config.get<string>('SII_RUT')!,
-          config.get<string>('SII_DV')!,
-        ),
+      useClass: BoletaSiiClient,
     },
   ],
-  exports: ['SII_CERT', FolioManager, SiiTokenManager, LegacySiiClient, BoletaSiiClient],
+  exports: ['FolioProvider', 'SigningProvider', SiiTokenManager, LegacySiiClient, BoletaSiiClient],
 })
 export class SiiModule {}
 ```
@@ -602,45 +586,47 @@ export class SiiModule {}
 // invoice.service.ts
 import { Injectable, Inject } from '@nestjs/common';
 import {
-  FolioManager, SiiTokenManager, LegacySiiClient,
+  SiiTokenManager, LegacySiiClient,
   buildDteXml, buildTedXml, signTed, signDteDocument,
   buildEnvioDteXml, signEnvelope,
   TipoDTE, SiiEnvironment,
-  type DteDocument, type CertificateMaterial, type EnvioDTECaratula,
+  type DteDocument, type EnvioDTECaratula, type IssuerContext, type FolioProvider, type SigningProvider,
 } from 'sii-engine';
 
 @Injectable()
 export class InvoiceService {
   constructor(
-    @Inject('SII_CERT') private readonly cert: CertificateMaterial,
-    private readonly folioManager: FolioManager,
+    @Inject('SigningProvider') private readonly signingProvider: SigningProvider,
+    @Inject('FolioProvider') private readonly folioProvider: FolioProvider,
     private readonly tokenManager: SiiTokenManager,
     private readonly siiClient: LegacySiiClient,
   ) {}
 
-  async emitirFactura(doc: DteDocument): Promise<{ trackId: string }> {
-    const assignment = this.folioManager.getNextFolio(TipoDTE.FacturaElectronica);
+  async emitirFactura(doc: DteDocument, context: IssuerContext): Promise<{ trackId: string }> {
+    const assignment = await this.folioProvider.getNextFolio(context, TipoDTE.FacturaElectronica);
     doc.idDoc.folio = assignment.folio;
+
+    // Se obtiene el certificado dinámicamente según el context.certificateRef
+    const cert = await this.signingProvider.getSigningMaterial(context);
 
     const frma       = signTed(doc, assignment.caf);
     const tedXml     = buildTedXml(doc, assignment.caf, frma);
     const dteXml     = buildDteXml(doc, tedXml);
-    const signedDte  = signDteDocument(dteXml, doc, this.cert);
+    const signedDte  = signDteDocument(dteXml, doc, cert);
 
     const caratula: EnvioDTECaratula = {
       rutEmisor: doc.emisor.rutEmisor,
-      rutEnvia: this.cert.rutFirmante,
-      fechaResolucion: process.env.SII_FECHA_RESOLUCION!,
-      nroResolucion: Number(process.env.SII_NRO_RESOLUCION),
-      tiposDTE: [TipoDTE.FacturaElectronica],
+      rutEnvia: cert.rutFirmante,
+      fechaResolucion: context.fechaResolucion,
+      nroResolucion: context.nroResolucion,
       fechaFirmaEnvio: new Date().toISOString().replace(/\.\d{3}Z$/, ''),
     };
 
     const sobre       = buildEnvioDteXml([{ document: doc, tedXml, signedXml: signedDte }], caratula);
-    const sobreFirmado = signEnvelope(sobre, this.cert);
+    const sobreFirmado = signEnvelope(sobre, cert);
 
-    const authToken = await this.tokenManager.getToken(SiiEnvironment.Certificacion, this.cert);
-    const result    = await this.siiClient.send(sobreFirmado, authToken.token);
+    const authToken = await this.tokenManager.getToken(context, this.signingProvider);
+    const result    = await this.siiClient.send(sobreFirmado, context, authToken.token);
 
     return { trackId: result.trackId };
   }
@@ -681,7 +667,7 @@ sii-engine/
 │   ├── types/          ← Tipos TypeScript del dominio fiscal
 │   ├── errors/         ← Jerarquía de errores tipados
 │   ├── states/         ← Taxonomía de estados SII (envío y DTE)
-│   ├── caf/            ← Parser de CAF XML + FolioManager
+│   ├── caf/            ← Parser de CAF XML + Interfaces Folio/Caf Provider
 │   ├── xml/            ← Constructores XML (DTE, TED, EnvioDTE, RVD, etc.)
 │   ├── signing/        ← Firma TED, XMLDSig, autenticación SII
 │   └── transport/      ← Clientes HTTP al SII (legacy y boleta)
@@ -693,11 +679,10 @@ sii-engine/
 
 ### Decisiones de diseño
 
-- **Library-first**: el motor no es una API, es un core embebible directamente en `business_app_back`
-- **Dos familias de transporte**: `LegacySiiClient` para DTE 33/56/61 (SOAP multipart + autenticación automática) y `BoletaSiiClient` para DTE 39 (plataforma dedicada + RVD diario)
-- **Tres capas de firma**: TED firmado con clave privada del CAF, documento firmado con certificado contribuyente (XMLDSig), sobre firmado con certificado contribuyente
-- **`SigningProvider` como contrato abstracto**: los certificados nunca quedan en la librería, se inyectan en runtime desde el host
-- **Estado como dominio**: los estados SII son entidades con semántica, no strings libres
+- **Library-first**: el motor no es una API, es un core embebible en backends NestJS distribuidos.
+- **Sin estado in-memory estricto**: interfaces `FolioProvider` y `CafProvider` permiten escalabilidad delegando persistencia transaccional al host.
+- **Multitenant y Seguro**: Todo depende de un `IssuerContext` por operación, eliminando variables de entorno globales. PFX y CAFs se traen por referencia dinámicamente con `SigningProvider`.
+- **Dos familias de transporte**: `LegacySiiClient` para DTE 33/56/61 y `BoletaSiiClient` para DTE 39.
 
 ---
 

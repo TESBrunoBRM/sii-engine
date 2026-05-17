@@ -19,14 +19,17 @@ export interface CafDa {
 export interface CafData {
   da: CafDa;
   frma: string;
-  rsask: string;
   rsapubk: string;
+}
+
+export interface CafMaterial extends CafData {
+  rsask: string;
   rawXml: string;
 }
 
 export interface FolioAssignment {
   folio: number;
-  caf: CafData;
+  caf: CafMaterial;
   assignedAt: Date;
 }
 

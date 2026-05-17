@@ -1,7 +1,7 @@
 import forge from "node-forge";
 import { SignedXml } from "xml-crypto";
 import type { CertificateMaterial } from "../types/signing.types.js";
-import type { CafData } from "../types/caf.types.js";
+import type { CafMaterial } from "../types/caf.types.js";
 import type { DteDocument } from "../types/dte.types.js";
 import { SiiSignError } from "../errors/sii-errors.js";
 import { buildDdXml } from "../xml/ted-builder.js";
@@ -10,7 +10,7 @@ import { buildDocumentId } from "../xml/dte-builder.js";
 
 export function signTed(
   doc: DteDocument,
-  caf: CafData,
+  caf: CafMaterial,
   timestamp?: string
 ): string {
   const ddXml = buildDdXml(doc, caf, timestamp);

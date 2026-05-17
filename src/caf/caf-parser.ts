@@ -1,5 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
-import type { CafData, CafDa } from "../types/caf.types.js";
+import type { CafData, CafDa, CafMaterial } from "../types/caf.types.js";
 import { TipoDTE } from "../types/dte.types.js";
 import { SiiCafError } from "../errors/sii-errors.js";
 
@@ -10,7 +10,7 @@ const parser = new XMLParser({
   trimValues: true,
 });
 
-export function parseCaf(cafXml: string): CafData {
+export function parseCaf(cafXml: string): CafMaterial {
   let parsed: Record<string, unknown>;
   try {
     parsed = parser.parse(cafXml) as Record<string, unknown>;
@@ -91,7 +91,7 @@ export function parseCaf(cafXml: string): CafData {
   };
 }
 
-export function extractCafXmlSection(cafData: CafData): string {
+export function extractCafXmlSection(cafData: CafMaterial): string {
   const startIndex = cafData.rawXml.indexOf("<CAF");
   const endIndex = cafData.rawXml.indexOf("</CAF>") + "</CAF>".length;
   if (startIndex === -1 || endIndex === -1) {

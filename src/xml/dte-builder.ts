@@ -1,5 +1,7 @@
 import type { DteDocument } from "../types/dte.types.js";
 import { TipoDTE } from "../types/dte.types.js";
+import type { IssuerContext } from "../types/context.types.js";
+import type { CafData } from "../types/caf.types.js";
 import { SiiError } from "../errors/sii-errors.js";
 
 function esc(value: unknown): string {
@@ -186,10 +188,25 @@ ${inner}
 </DTE>`;
 }
 
-export function validateDteDocument(doc: DteDocument): void {
+export function validateDteDocument(doc: DteDocument, context?: IssuerContext, caf?: CafData): void {
   if (!doc.emisor.rutEmisor) {
     throw new SiiError("VALIDATION_ERROR", "RUT del emisor es requerido");
   }
+
+  if (context && doc.emisor.rutEmisor !== context.rutEmisor) {
+    throw new SiiError(
+      "VALIDATION_ERROR",
+      `El RUT del documento (${doc.emisor.rutEmisor}) no coincide con el RUT del contexto (${context.rutEmisor})`
+    );
+  }
+
+  if (caf && doc.emisor.rutEmisor !== caf.da.rutEmisor) {
+    throw new SiiError(
+      "VALIDATION_ERROR",
+      `El RUT del documento (${doc.emisor.rutEmisor}) no coincide con el RUT del CAF (${caf.da.rutEmisor})`
+    );
+  }
+
   if (doc.detalles.length === 0) {
     throw new SiiError("VALIDATION_ERROR", "El DTE debe tener al menos un ítem de detalle");
   }

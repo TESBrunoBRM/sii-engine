@@ -1,12 +1,14 @@
-import type { CafData, FolioAssignment, CafWithStatus } from "../types/caf.types.js";
+import type { CafMaterial, FolioAssignment, CafWithStatus } from "../types/caf.types.js";
 import type { TipoDTE } from "../types/dte.types.js";
+import type { IssuerContext } from "../types/context.types.js";
 import { SiiCafError } from "../errors/sii-errors.js";
 import { isCafExpired, isCafExpiringSoon } from "./caf-parser.js";
+import type { FolioProvider } from "./folio-provider.js";
 
-export class FolioManager {
+export class InMemoryFolioProvider implements FolioProvider {
   private cafMap: Map<TipoDTE, CafEntry[]> = new Map();
 
-  addCaf(caf: CafData): void {
+  addCaf(caf: CafMaterial): void {
     const tipoDTE = caf.da.tipoDTE;
     if (!this.cafMap.has(tipoDTE)) {
       this.cafMap.set(tipoDTE, []);
@@ -28,7 +30,7 @@ export class FolioManager {
     entries.sort((a, b) => a.caf.da.rangeStart - b.caf.da.rangeStart);
   }
 
-  getNextFolio(tipoDTE: TipoDTE): FolioAssignment {
+  async getNextFolio(_context: IssuerContext, tipoDTE: TipoDTE): Promise<FolioAssignment> {
     const entries = this.cafMap.get(tipoDTE);
     if (!entries || entries.length === 0) {
       throw new SiiCafError(
@@ -57,7 +59,7 @@ export class FolioManager {
     );
   }
 
-  reserveFolio(tipoDTE: TipoDTE, folio: number): FolioAssignment {
+  async reserveFolio(_context: IssuerContext, tipoDTE: TipoDTE, folio: number): Promise<FolioAssignment> {
     const entries = this.cafMap.get(tipoDTE);
     if (!entries || entries.length === 0) {
       throw new SiiCafError(
@@ -82,7 +84,7 @@ export class FolioManager {
     );
   }
 
-  getStatus(tipoDTE?: TipoDTE): CafWithStatus[] {
+  async getStatus(_context: IssuerContext, tipoDTE?: TipoDTE): Promise<CafWithStatus[]> {
     const result: CafWithStatus[] = [];
     const types = tipoDTE ? [tipoDTE] : Array.from(this.cafMap.keys());
 
@@ -113,8 +115,8 @@ export class FolioManager {
     return result;
   }
 
-  getRemainingFolios(tipoDTE: TipoDTE): number {
-    const statuses = this.getStatus(tipoDTE);
+  async getRemainingFolios(context: IssuerContext, tipoDTE: TipoDTE): Promise<number> {
+    const statuses = await this.getStatus(context, tipoDTE);
     return statuses
       .filter((s) => s.status === "active")
       .reduce((acc, s) => acc + s.remaining, 0);
@@ -122,6 +124,6 @@ export class FolioManager {
 }
 
 interface CafEntry {
-  caf: CafData;
+  caf: CafMaterial;
   currentFolio: number;
 }

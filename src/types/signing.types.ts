@@ -1,3 +1,5 @@
+import { IssuerContext } from "./context.types.js";
+
 export interface CertificateMaterial {
   privateKeyPem: string;
   certificatePem: string;
@@ -7,15 +9,7 @@ export interface CertificateMaterial {
 }
 
 export interface SigningProvider {
-  getSigningMaterial(context: SigningContext): Promise<CertificateMaterial>;
-}
-
-export interface SigningContext {
-  rutEmisor: string;
-  tipoDTE?: number;
-  environment?: string;
-  branchId?: string;
-  tenantId?: string;
+  getSigningMaterial(context: IssuerContext): Promise<CertificateMaterial>;
 }
 
 export interface CafSigningKey {

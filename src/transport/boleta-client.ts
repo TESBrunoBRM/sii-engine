@@ -2,6 +2,7 @@ import axios from "axios";
 import { XMLParser } from "fast-xml-parser";
 import type { SendResult, StatusQueryResult } from "../types/transport.types.js";
 import { SiiEnvironment } from "../types/transport.types.js";
+import type { IssuerContext } from "../types/context.types.js";
 import { SiiSendError, SiiError } from "../errors/sii-errors.js";
 import { parseSendStatus } from "../states/index.js";
 
@@ -229,46 +230,47 @@ export async function sendResumenVentasDiarias(
 }
 
 export class BoletaSiiClient {
-  constructor(
-    private readonly environment: SiiEnvironment,
-    private readonly rutEmpresa: string,
-    private readonly dvEmpresa: string
-  ) {}
+  constructor() {}
 
   async send(
     envioBoleta: string,
+    context: IssuerContext,
     token: string,
     rutSender?: string,
     dvSender?: string
   ): Promise<SendResult> {
+    const [rutEmisor, dvEmisor] = context.rutEmisor.split("-");
+    const [rutS, dvS] = rutSender ? [rutSender, dvSender] : [rutEmisor, dvEmisor];
     return sendBoleta(envioBoleta, {
-      rutSender: rutSender ?? this.rutEmpresa,
-      dvSender: dvSender ?? this.dvEmpresa,
-      rutCompany: this.rutEmpresa,
-      dvCompany: this.dvEmpresa,
+      rutSender: rutS ?? rutEmisor,
+      dvSender: dvS ?? dvEmisor,
+      rutCompany: rutEmisor,
+      dvCompany: dvEmisor,
       token,
-      environment: this.environment,
+      environment: context.environment,
     });
   }
 
-  async queryStatus(trackId: string, token: string): Promise<StatusQueryResult> {
+  async queryStatus(trackId: string, context: IssuerContext, token: string): Promise<StatusQueryResult> {
+    const [rutEmisor, dvEmisor] = context.rutEmisor.split("-");
     return queryBoletaStatus({
-      rutEmpresa: this.rutEmpresa,
-      dvEmpresa: this.dvEmpresa,
+      rutEmpresa: rutEmisor,
+      dvEmpresa: dvEmisor,
       trackId,
       token,
-      environment: this.environment,
+      environment: context.environment,
     });
   }
 
-  async sendRvd(rvdXml: string, token: string): Promise<SendResult> {
+  async sendRvd(rvdXml: string, context: IssuerContext, token: string): Promise<SendResult> {
+    const [rutEmisor, dvEmisor] = context.rutEmisor.split("-");
     return sendResumenVentasDiarias(rvdXml, {
-      rutSender: this.rutEmpresa,
-      dvSender: this.dvEmpresa,
-      rutCompany: this.rutEmpresa,
-      dvCompany: this.dvEmpresa,
+      rutSender: rutEmisor,
+      dvSender: dvEmisor,
+      rutCompany: rutEmisor,
+      dvCompany: dvEmisor,
       token,
-      environment: this.environment,
+      environment: context.environment,
     });
   }
 }

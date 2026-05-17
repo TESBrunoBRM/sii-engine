@@ -10,7 +10,24 @@ function esc(value: unknown): string {
     .replace(/>/g, "&gt;");
 }
 
-function buildCaratulaEnvioDte(caratula: EnvioDTECaratula): string {
+function buildSubTotDTE(dtes: DteFirmado[]): string {
+  const counts = new Map<number, number>();
+  for (const dte of dtes) {
+    const tpo = dte.document.idDoc.tipoDTE;
+    counts.set(tpo, (counts.get(tpo) ?? 0) + 1);
+  }
+
+  let xml = "";
+  for (const [tpo, nro] of counts.entries()) {
+    xml += `<SubTotDTE>
+<TpoDTE>${tpo}</TpoDTE>
+<NroDTE>${nro}</NroDTE>
+</SubTotDTE>\n`;
+  }
+  return xml.trim();
+}
+
+function buildCaratulaEnvioDte(caratula: EnvioDTECaratula, dtes: DteFirmado[]): string {
   return `<Caratula version="1.0">
 <RutEmisor>${esc(caratula.rutEmisor)}</RutEmisor>
 <RutEnvia>${esc(caratula.rutEnvia)}</RutEnvia>
@@ -18,14 +35,11 @@ function buildCaratulaEnvioDte(caratula: EnvioDTECaratula): string {
 <FchResol>${esc(caratula.fechaResolucion)}</FchResol>
 <NroResol>${caratula.nroResolucion}</NroResol>
 <TmstFirmaEnv>${esc(caratula.fechaFirmaEnvio)}</TmstFirmaEnv>
-<SubTotDTE>
-<TpoDTE>${caratula.tiposDTE.join(", ")}</TpoDTE>
-<NroDTE>${caratula.tiposDTE.length}</NroDTE>
-</SubTotDTE>
+${buildSubTotDTE(dtes)}
 </Caratula>`;
 }
 
-function buildCaratulaEnvioBoleta(caratula: EnvioDTECaratula): string {
+function buildCaratulaEnvioBoleta(caratula: EnvioDTECaratula, dtes: DteFirmado[]): string {
   return `<Caratula>
 <RutEmisor>${esc(caratula.rutEmisor)}</RutEmisor>
 <RutEnvia>${esc(caratula.rutEnvia)}</RutEnvia>
@@ -33,10 +47,7 @@ function buildCaratulaEnvioBoleta(caratula: EnvioDTECaratula): string {
 <FchResol>${esc(caratula.fechaResolucion)}</FchResol>
 <NroResol>${caratula.nroResolucion}</NroResol>
 <TmstFirmaEnv>${esc(caratula.fechaFirmaEnvio)}</TmstFirmaEnv>
-<SubTotDTE>
-<TpoDTE>${caratula.tiposDTE.join(", ")}</TpoDTE>
-<NroDTE>${caratula.tiposDTE.length}</NroDTE>
-</SubTotDTE>
+${buildSubTotDTE(dtes)}
 </Caratula>`;
 }
 
@@ -58,7 +69,7 @@ export function buildEnvioDteXml(
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://www.sii.cl/SiiDte EnvioDTE_v10.xsd"
   version="1.0">
-${buildCaratulaEnvioDte(caratula)}
+${buildCaratulaEnvioDte(caratula, dtes)}
 ${dtesXml}
 </EnvioDTE>`;
 }
@@ -81,7 +92,7 @@ export function buildEnvioBoletaXml(
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://www.sii.cl/SiiDte EnvioBOLETA_v11.xsd"
   version="1.0">
-${buildCaratulaEnvioBoleta(caratula)}
+${buildCaratulaEnvioBoleta(caratula, dtes)}
 ${dtesXml}
 </EnvioBOLETA>`;
 }
